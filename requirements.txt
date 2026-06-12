@@ -1,0 +1,25 @@
+# Core
+ultralytics>=8.3.0
+torch>=2.5.0
+torchvision
+numpy
+
+# App / visualization
+streamlit>=1.30
+matplotlib
+pillow
+opencv-python
+
+# UVL feature-model analysis (src/analyze_uvl.py).
+# flamapy-bdd pulls the `dd` BDD library; on Python 3.9 install with:
+#   pip install --no-build-isolation flamapy-bdd
+flamapy-fm
+flamapy-sat
+flamapy-bdd
+
+# Utilities
+pyyaml
+requests
+
+# Versions used for the reported experiments: torch 2.8.0, ultralytics 8.4.66,
+# flamapy 2.0.1/2.5.0, on Python 3.9 (Apple M5 / MPS).

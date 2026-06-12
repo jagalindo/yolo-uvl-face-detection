@@ -1,0 +1,116 @@
+namespace YOLOv11_FaceDetection
+
+features
+    YOLOv11
+        mandatory
+            Backbone
+                mandatory
+                    SPPF
+                    ModelScale
+                        alternative
+                            Nano
+                            Small
+                            Medium
+                            Large
+                            XLarge
+                    CSPBlock
+                        alternative
+                            C3k2
+                            C2f
+                optional
+                    C2PSA
+            ImageCapture
+                mandatory
+                    Lighting
+                        alternative
+                            Daylight
+                            ArtificialLight
+                            LowLight
+                    Occlusion
+                        alternative
+                            NoOcclusion
+                            PartialOcclusion
+                            FullOcclusion
+                optional
+                    Effects
+                        or
+                            Shadow
+                            MotionBlur
+                            SensorNoise
+                            BrightnessVariation
+            DataProcessing
+                mandatory
+                    InputSize
+                        alternative
+                            S640
+                            S960
+                            S1280
+                optional
+                    Preprocessing
+                        or
+                            Normalize
+                            Resizing
+                            Denoising
+                            ColorCorrection
+                            HistogramEqualization
+                    Augmentation
+                        alternative
+                            LightAug
+                            HeavyAug
+            Training
+                mandatory
+                    Optimizer
+                        alternative
+                            SGD
+                            Adam
+                            AdamW
+                            AutoOpt
+                    Precision
+                        alternative
+                            FP32
+                            FP16
+                            INT8
+                optional
+                    Scheduler
+                        alternative
+                            CosineLR
+                            LinearLR
+            Detection
+                mandatory
+                    DetectionMode
+                        alternative
+                            SingleFace
+                            MultiFace
+                    Head
+                        alternative
+                            DecoupledHead
+                            AnchorFree
+                            AnchorBased
+            PostProcessing
+                mandatory
+                    NMS
+                        alternative
+                            StandardNMS
+                            SoftNMS
+                optional
+                    ClassAgnosticNMS
+            Evaluation
+                mandatory
+                    DatasetType
+                        alternative
+                            COCO
+                            PascalVOC
+                            KITTI
+                            CustomFace
+                            Synthetic
+                            Mixed
+                optional
+                    SaveVisuals
+
+constraints
+    C2PSA => C3k2
+    FP16 => !HeavyAug
+    INT8 => MultiFace
+    LowLight => HistogramEqualization
+    S1280 => !Nano
+    SoftNMS => MultiFace

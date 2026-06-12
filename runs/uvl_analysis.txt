@@ -1,0 +1,18 @@
+Model file            : yolo_custom_model.uvl
+Root feature          : YOLOv11
+Satisfiable (valid)   : True
+Total features        : 76
+Leaf features         : 53
+Max tree depth (nodes): 4
+Top-level dimensions  : 7 -> ['Backbone', 'ImageCapture', 'DataProcessing', 'Training', 'Detection', 'PostProcessing', 'Evaluation']
+Core features         : 20
+Dead features         : 0
+VALID CONFIGURATIONS  : 2,926,264,320
+
+Random sample of 6 valid configurations (selected leaf features):
+  [1] Adam, AnchorBased, BrightnessVariation, C3k2, COCO, ClassAgnosticNMS, ColorCorrection, Daylight, Denoising, FullOcclusion, HeavyAug, HistogramEqualization, INT8, LinearLR, Medium, MultiFace, Normalize, S640, SPPF, SoftNMS
+  [2] ArtificialLight, AutoOpt, BrightnessVariation, C2PSA, C3k2, ColorCorrection, DecoupledHead, FP32, FullOcclusion, LightAug, LinearLR, MotionBlur, MultiFace, Normalize, PascalVOC, S960, SPPF, SaveVisuals, SoftNMS, XLarge
+  [3] Adam, AnchorFree, ArtificialLight, C3k2, ColorCorrection, FP32, KITTI, Large, LightAug, MultiFace, NoOcclusion, S1280, SPPF, SaveVisuals, SensorNoise, Shadow, SoftNMS
+  [4] AdamW, AnchorFree, BrightnessVariation, C2f, ClassAgnosticNMS, ColorCorrection, CosineLR, Daylight, FullOcclusion, HeavyAug, HistogramEqualization, INT8, Medium, MotionBlur, MultiFace, Resizing, S640, SPPF, SensorNoise, Shadow, SoftNMS, Synthetic
+  [5] Adam, AnchorBased, C2PSA, C3k2, ClassAgnosticNMS, ColorCorrection, CosineLR, Daylight, Denoising, FP32, FullOcclusion, HeavyAug, KITTI, MotionBlur, MultiFace, S1280, SPPF, SensorNoise, StandardNMS, XLarge
+  [6] Adam, C2PSA, C3k2, CosineLR, CustomFace, Daylight, DecoupledHead, Denoising, FP16, FullOcclusion, HistogramEqualization, Medium, MotionBlur, MultiFace, Resizing, S960, SPPF, SaveVisuals, Shadow, SoftNMS

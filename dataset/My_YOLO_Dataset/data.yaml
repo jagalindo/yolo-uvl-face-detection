@@ -1,0 +1,6 @@
+path: /Users/jagalindo/Documents/Projects/Work/Research/Papers/haya-yolo/code/yolo-uvl-face-detection/dataset/My_YOLO_Dataset
+train: images/train
+val: images/val
+nc: 1
+names:
+- face

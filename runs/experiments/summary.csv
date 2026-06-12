@@ -1,0 +1,8 @@
+config,axis,model,imgsz,augment,precision,epochs,train_min,P,R,mAP50,mAP50_95,latency_ms,status
+base_s_640_aug,baseline,yolo11s.pt,640,True,FP32,50,0.0,0.6178,0.5621,0.5732,0.186,23.95,reused
+model_n_640_aug,model_size,yolo11n.pt,640,True,FP32,50,0.0,0.683,0.503,0.5675,0.1845,13.28,reused
+model_m_640_aug,model_size,yolo11m.pt,640,True,FP32,50,0.0,0.6221,0.4774,0.4958,0.1566,36.79,reused
+noaug_s_640,augment,yolo11s.pt,640,False,FP32,50,38.8,0.4971,0.3077,0.283,0.0715,12.9,ok
+input_s_960_aug,input_size,yolo11s.pt,960,True,FP32,50,104.4,0.7303,0.5266,0.5734,0.1686,41.82,ok
+precision_fp32,precision,yolo11s.pt,640,True,FP32,50,0.0,0.6178,0.5621,0.5732,0.186,17.37,ok
+precision_fp16,precision,yolo11s.pt,640,True,FP16,50,0.0,0.6228,0.5621,0.5734,0.185,402.78,ok
