@@ -9,6 +9,7 @@ streamlit>=1.30
 matplotlib
 pillow
 opencv-python
+pymupdf  # optional: PDF page input in the Streamlit app (import fitz)
 
 # UVL feature-model analysis (src/analyze_uvl.py).
 # flamapy-bdd pulls the `dd` BDD library; on Python 3.9 install with:

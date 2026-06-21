@@ -54,37 +54,58 @@ def sample_configs(bdd, leaf_names, n):
     return out
 
 
+def analyze(uvl_path=UVL):
+    """Run the full BDD analysis and return results as a dict (importable API)."""
+    fm = UVLReader(str(uvl_path)).transform()
+    features = fm.get_features()
+    leaves = [f for f in features if not children(f)]
+    root = fm.root
+    dims = [c.name for c in children(root)]
+
+    bdd = FmToBDD(fm).transform()
+    return {
+        "model_file": Path(uvl_path).name,
+        "root": root.name,
+        "satisfiable": run(BDDSatisfiable(), bdd),
+        "n_features": len(features),
+        "n_leaves": len(leaves),
+        "max_depth": depth_nodes(root),
+        "dimensions": dims,
+        "n_core": len(run(BDDCoreFeatures(), bdd)),
+        "n_dead": len(run(BDDDeadFeatures(), bdd)),
+        "n_configs": run(BDDConfigurationsNumber(), bdd),
+        "_bdd": bdd,
+        "_leaf_names": {f.name for f in leaves},
+    }
+
+
+def sample(n=5, uvl_path=UVL):
+    """Return n random valid configurations (list of selected-leaf lists)."""
+    res = analyze(uvl_path)
+    return sample_configs(res["_bdd"], res["_leaf_names"], n)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", type=int, default=5, help="number of random valid configs to list")
     args = ap.parse_args()
 
-    fm = UVLReader(str(UVL)).transform()
-    features = fm.get_features()
-    leaves = [f for f in features if not children(f)]
-    leaf_names = {f.name for f in leaves}
-    root = fm.root
-    dims = [c.name for c in children(root)]
+    r = analyze()
+    satisfiable = r["satisfiable"]
+    n_configs = r["n_configs"]
 
-    bdd = FmToBDD(fm).transform()
-    satisfiable = run(BDDSatisfiable(), bdd)
-    n_configs = run(BDDConfigurationsNumber(), bdd)
-    core = run(BDDCoreFeatures(), bdd)
-    dead = run(BDDDeadFeatures(), bdd)
-
-    print(f"Model file            : {UVL.name}")
-    print(f"Root feature          : {root.name}")
+    print(f"Root feature          : {r['root']}")
     print(f"Satisfiable (valid)   : {satisfiable}")
-    print(f"Total features        : {len(features)}")
-    print(f"Leaf features         : {len(leaves)}")
-    print(f"Max tree depth (nodes): {depth_nodes(root)}")
-    print(f"Top-level dimensions  : {len(dims)} -> {dims}")
-    print(f"Core features         : {len(core)}")
-    print(f"Dead features         : {len(dead)}")
+    print(f"Total features        : {r['n_features']}")
+    print(f"Leaf features         : {r['n_leaves']}")
+    print(f"Max tree depth (nodes): {r['max_depth']}")
+    print(f"Top-level dimensions  : {len(r['dimensions'])} -> {r['dimensions']}")
+    print(f"Core features         : {r['n_core']}")
+    print(f"Dead features         : {r['n_dead']}")
     print(f"VALID CONFIGURATIONS  : {n_configs:,}")
 
     print(f"\nRandom sample of {args.sample} valid configurations (selected leaf features):")
-    for i, sel in enumerate(sample_configs(bdd, leaf_names, args.sample), 1):
+    for i, sel in enumerate(sample_configs(r["_bdd"], r["_leaf_names"], args.sample), 1):
         print(f"  [{i}] {', '.join(sel)}")
 
 

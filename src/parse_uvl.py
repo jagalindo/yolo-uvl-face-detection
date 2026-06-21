@@ -1,84 +1,97 @@
-"""Load the canonical UVL feature model and demonstrate translating a selected
-feature configuration into a concrete YOLO evaluation run.
+"""CLI: validate a UVL feature selection, export it as a JSON artifact, and
+evaluate it with REAL metrics (live model.val on the matching trained weights,
+falling back to the recorded experiment summary). No metrics are fabricated.
 
-The model itself lives in models/yolo_custom_model.uvl (single source of truth,
-analyzed with FlamaPy in src/analyze_uvl.py). This script does NOT regenerate it.
-
-Run:  python src/parse_uvl.py
+Run:  python src/parse_uvl.py                 # live eval, recorded fallback
+      python src/parse_uvl.py --source recorded   # rely on recorded paper results
 """
+import argparse
 import os
 from pathlib import Path
 
+import torch
 from ultralytics import YOLO
-import matplotlib.pyplot as plt
 
-# Project root = parent of the src/ directory that holds this file.
+import uvl_config as uvl
+
 ROOT = Path(__file__).resolve().parent.parent
-UVL_FILE_PATH = ROOT / "models" / "yolo_custom_model.uvl"
-RESULTS_DIR = ROOT / "results"
-
-# 1. Load the canonical UVL model (authored once, analyzed by src/analyze_uvl.py).
-with open(UVL_FILE_PATH, "r", encoding="utf-8") as f:
-    uvl_content = f.read()
-print(f"Loaded UVL model from: {UVL_FILE_PATH} ({len(uvl_content.splitlines())} lines)")
-
-# 2. Subset of the feature->parameter mapping used to turn a UVL selection into
-#    concrete Ultralytics arguments. Feature names match the canonical model.
-yolo_feature_model_python = {
-    "ModelScale": {"Nano": "yolo11n.pt", "Small": "yolo11s.pt", "Medium": "yolo11m.pt",
-                   "Large": "yolo11l.pt", "XLarge": "yolo11x.pt"},
-    "InputSize": {"S640": 640, "S960": 960, "S1280": 1280},
-    "Precision": {"FP32": False, "FP16": True, "INT8": "Quantized"},
-    "Augmentation": {"LightAug": "light", "HeavyAug": "heavy"},
-    "DetectionMode": {"SingleFace": 1, "MultiFace": 300},
-}
+UVL_FILE = ROOT / "models" / "yolo_custom_model.uvl"
+DATA_YAML = ROOT / "dataset" / "My_YOLO_Dataset" / "data.yaml"
+JSON_OUT = ROOT / "results" / "validated_config.json"
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def generate_yolo_config(selected_features):
-    """Translate a validated UVL feature selection into Ultralytics arguments."""
-    print("\nTranslating UVL features to YOLO configuration...")
-    base_weights = yolo_feature_model_python["ModelScale"].get(selected_features.get("ModelScale"), "yolo11s.pt")
-    imgsz = yolo_feature_model_python["InputSize"].get(selected_features.get("InputSize"), 640)
-    half = yolo_feature_model_python["Precision"].get(selected_features.get("Precision"), False)
-    max_det = yolo_feature_model_python["DetectionMode"].get(selected_features.get("DetectionMode"), 300)
-
-    print(f"-> base weights : {base_weights}")
-    print(f"-> imgsz        : {imgsz}")
-    print(f"-> half (FP16)  : {half}")
-    print(f"-> max_det      : {max_det}")
-
+def print_uvl_summary():
+    print("=" * 58)
+    print(f"📖 UVL feature model: {UVL_FILE.name}")
     try:
-        model = YOLO(base_weights)
-        # coco8 is only a smoke-test target; point this at the real data.yaml to evaluate.
-        results = model.val(data="coco8.yaml", imgsz=imgsz, half=bool(half) if half is not True else True,
-                            max_det=max_det, device="cpu")
-        m = results.box
-        p, r, map50 = m.mp, m.mr, m.map50
-        f1 = 2 * (p * r) / (p + r) if (p + r) > 0 else 0.0
-        print(f"\n--- Results --- P={p:.3f} R={r:.3f} F1={f1:.3f} mAP@50={map50:.3f}")
-
-        os.makedirs(RESULTS_DIR, exist_ok=True)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        bars = ax.bar(["Precision", "Recall", "F1", "mAP@50"], [p, r, f1, map50],
-                      color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'])
-        ax.set_ylim(0, 1.1); ax.set_title("YOLO Face Detection Evaluation")
-        for bar in bars:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
-                    f"{bar.get_height():.2f}", ha='center', va='bottom')
-        out_png = RESULTS_DIR / "evaluation_results.png"
-        plt.savefig(out_png)
-        print(f"Chart saved: {out_png}")
+        import analyze_uvl
+        s = analyze_uvl.analyze()
+        print(f"  dimensions : {len(s['dimensions'])} -> {', '.join(s['dimensions'])}")
+        print(f"  features   : {s['n_features']} ({s['n_leaves']} leaves), max depth {s['max_depth']}")
+        print(f"  satisfiable: {s['satisfiable']}, dead features: {s['n_dead']}")
+        print(f"  VALID CONFIGURATIONS: {s['n_configs']:,}")
     except Exception as e:
-        print(f"Error during evaluation: {e}")
+        print(f"  (FlamaPy analysis unavailable: {e})")
+    print("=" * 58)
+
+
+def run_evaluation(selected, source="live"):
+    print_uvl_summary()
+
+    ok, errors = uvl.validate_configuration(selected)
+    print("\n🔍 Validating against cross-tree constraints...")
+    if not ok:
+        for e in errors:
+            print(f"  ❌ {e}")
+        print("\n❌ Configuration is UNSATISFIABLE — evaluation aborted.")
+        return
+    print("  ✅ SATISFIABLE — all constraints hold.")
+
+    path = uvl.export_json(selected, JSON_OUT)
+    print(f"💾 Exported validated JSON artifact: {path}")
+
+    args = uvl.config_to_yolo_args(selected)
+    print(f"⚙️  Translated args: {args}")
+
+    # Real evaluation: live val on the matching trained weights, unless the
+    # user asked to rely on the recorded paper results.
+    weights = uvl.trained_weights_for(selected)
+    metrics = None
+    if source == "live" and weights is not None and DATA_YAML.exists():
+        try:
+            print(f"🚀 Live model.val() on {weights.parent.parent.name}/best.pt ...")
+            b = YOLO(str(weights)).val(
+                data=str(DATA_YAML), imgsz=args["imgsz"], half=args["half"],
+                device=DEVICE, verbose=False, max_det=args["max_det"], workers=0, plots=False).box
+            metrics = {"P": b.mp, "R": b.mr, "mAP50": b.map50, "mAP50_95": b.map}
+            source = "live model.val()"
+        except Exception as e:
+            print(f"  (live val unavailable: {str(e)[:90]})")
+    if metrics is None:
+        m, cfg, note = uvl.measured_metrics(selected)
+        if m is None:
+            print(f"⚠️ No measured results: {note}")
+            return
+        metrics, source = m, f"recorded summary.csv [{cfg}] ({note})"
+
+    f1 = (2 * metrics["P"] * metrics["R"] / (metrics["P"] + metrics["R"])
+          if metrics["P"] + metrics["R"] > 0 else 0.0)
+    print(f"\n📊 Results ({source}):")
+    print(f"   P={metrics['P']:.3f}  R={metrics['R']:.3f}  F1={f1:.3f}  "
+          f"mAP@50={metrics['mAP50']:.3f}  mAP@50-95={metrics['mAP50_95']:.3f}")
 
 
 if __name__ == "__main__":
-    # A sample configuration as would be produced by the UVL/FlamaPy pipeline.
-    sample_configuration = {
-        "ModelScale": "Small",
-        "InputSize": "S960",
-        "Precision": "FP16",
-        "Augmentation": "LightAug",
-        "DetectionMode": "MultiFace",
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--source", choices=["live", "recorded"], default="live",
+                    help="'live' runs model.val(); 'recorded' relies on summary.csv")
+    cli = ap.parse_args()
+    sample = {
+        "ModelScale": "Small", "CSPBlock": "C3k2", "C2PSA": True,
+        "Lighting": "LowLight", "Occlusion": "NoOcclusion", "InputSize": "S640",
+        "Augmentation": "LightAug", "HistogramEqualization": True, "Optimizer": "AdamW",
+        "Precision": "FP16", "DetectionMode": "MultiFace", "Head": "DecoupledHead",
+        "NMS": "StandardNMS", "DatasetType": "CustomFace",
     }
-    generate_yolo_config(sample_configuration)
+    run_evaluation(sample, source=cli.source)

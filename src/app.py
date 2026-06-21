@@ -1,9 +1,20 @@
-"""Streamlit UI that maps the UVL feature model onto YOLOv11 inference/eval.
+"""Streamlit UI: UVL feature-model configurator + YOLOv11 detector/evaluator.
+
+Two tabs:
+  1. Detector Dashboard - translate a feature selection into YOLO arguments,
+     run REAL validation (live model.val on the matching trained weights, with
+     fallback to recorded runs/experiments/summary.csv), and run live inference
+     on an uploaded image or PDF page.
+  2. FlamaPy IDE Configurator - interactive feature tree with live cross-tree
+     constraint checking and the REAL BDD analysis (FlamaPy) of the model.
 
 Run:  streamlit run src/app.py     (or simply:  python src/app.py)
 """
+import io
 import os
 import sys
+import time
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -13,43 +24,19 @@ import torch
 from PIL import Image, ImageEnhance
 from ultralytics import YOLO
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import uvl_config as uvl
 
-def update_dataset_path(yaml_path):
-    if not yaml_path or not os.path.exists(yaml_path):
-        return
-    try:
-        yaml_path = os.path.abspath(yaml_path)
-        dataset_dir = os.path.dirname(yaml_path).replace("\\", "/")
-        with open(yaml_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        modified = False
-        path_found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith('path:'):
-                current_val = line.split(':', 1)[1].strip().replace('"', '').replace("'", "")
-                if current_val != dataset_dir:
-                    lines[i] = f"path: {dataset_dir}\n"
-                    modified = True
-                path_found = True
-                break
-
-        if not path_found:
-            lines.insert(0, f"path: {dataset_dir}\n")
-            modified = True
-
-        if modified:
-            with open(yaml_path, 'w', encoding='utf-8') as f:
-                f.writelines(lines)
-    except Exception as e:
-        print(f"Error updating dataset path in YAML: {e}")
+try:
+    import fitz  # PyMuPDF, optional - enables PDF page input
+except Exception:
+    fitz = None
 
 
-# Auto-launch Streamlit if run directly via standard Python command
+# --- Auto-launch Streamlit if run as a plain script ---------------------------
 if not st.runtime.exists():
     import subprocess
-
-    print("🚀 Launching Streamlit interface, please wait a moment for the browser to open...")
+    print("🚀 Launching Streamlit interface...")
     try:
         subprocess.run([sys.executable, "-m", "streamlit", "run", sys.argv[0]])
     except KeyboardInterrupt:
@@ -58,235 +45,277 @@ if not st.runtime.exists():
 
 st.set_page_config(page_title="YOLOv11 + UVL Face Detection", layout="wide")
 
-# Project root = parent of the src/ directory that holds this file.
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_YAML = str(ROOT / "dataset" / "My_YOLO_Dataset" / "data.yaml")
+DEFAULT_MODEL = str(ROOT / "models" / "weights" / "best.pt")
+DEFAULT_IMAGE = str(ROOT / "assets" / "input_sample.png")
 FALLBACK_WEIGHTS = str(ROOT / "models" / "weights" / "yolo11s.pt")
+DEVICE = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
 
-default_yaml = str(ROOT / "dataset" / "My_YOLO_Dataset" / "data.yaml")
-default_model = str(ROOT / "models" / "weights" / "best.pt")
-default_image = str(ROOT / "assets" / "input_sample.png")
 
-st.title("🖥️ YOLOv11 Face Detection (Custom UVL)")
-st.markdown(
-    "This program integrates the feature tree (UVL) you designed with the YOLOv11 inference and evaluation engine.")
+@st.cache_resource
+def load_cached_yolo(model_path):
+    """Load YOLO weights once and reuse across reruns."""
+    return YOLO(model_path)
 
-# 1. Sidebar (Simulating your UVL)
-st.sidebar.header("🛠️ UVL Options (ModelConfig)")
 
-st.sidebar.subheader("1. Architecture")
-backbone = st.sidebar.selectbox("Backbone", ["C3K2", "C2psa", "SPPF"])
-head = st.sidebar.selectbox("Head", ["DecoupledHead", "AnchorFree", "AnchorBased"])
-neck = st.sidebar.selectbox("Neck", ["FPN", "PANet", "BiFPN"])
+@st.cache_resource
+def cached_uvl_stats():
+    """Run the real FlamaPy/BDD analysis once and cache the plain stats."""
+    import analyze_uvl
+    r = analyze_uvl.analyze()
+    return {k: v for k, v in r.items() if not k.startswith("_")}
 
-st.sidebar.subheader("2. Input Settings")
-input_size = st.sidebar.selectbox("InputSize", ["S640", "S960", "S1280"])
-precision = st.sidebar.selectbox("Precision", ["FP32", "FP16", "INT8"])
 
-st.sidebar.subheader("3. Optimization Settings")
-# Optimization sliders to get high percentages
-conf_threshold = st.sidebar.slider("Confidence Threshold", 0.01, 1.00, 0.25, 0.05)
-iou_threshold = st.sidebar.slider("IoU Threshold", 0.10, 0.90, 0.45, 0.05)
+def update_dataset_path(yaml_path):
+    """Make data.yaml's `path:` absolute so Ultralytics resolves it."""
+    if not yaml_path or not os.path.exists(yaml_path):
+        return
+    try:
+        yaml_path = os.path.abspath(yaml_path)
+        dataset_dir = os.path.dirname(yaml_path).replace("\\", "/")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("path:"):
+                lines[i] = f"path: {dataset_dir}\n"
+                found = True
+                break
+        if not found:
+            lines.insert(0, f"path: {dataset_dir}\n")
+        with open(yaml_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception as e:
+        print(f"Error updating dataset path: {e}")
 
-st.sidebar.subheader("4. Dataset & Model Settings")
-dataset_type = st.sidebar.selectbox("DatasetType", ["Custom (Kaggle WIDER FACE)", "COCO", "Synthetic"])
-custom_dataset_path = st.sidebar.text_input("📂 Evaluation Data Path (.yaml)",
-                                            value=default_yaml)
-custom_model_path = st.sidebar.text_input("📂 Trained Model Path (.pt)",
-                                          value=default_model)
-face_detection_type = st.sidebar.radio("FaceDetection", ["SingleFace", "MultiFace"])
 
-st.sidebar.subheader("5. Preprocessing")
-normalize = st.sidebar.checkbox("Normalize", value=True)
-resizing = st.sidebar.checkbox("Resizing", value=True)
+# --- Sidebar: the UVL feature tree (writes into st.session_state) --------------
+st.sidebar.header("🛠️ UVL Feature Tree")
+DEFAULTS = {
+    "ModelScale": "Small", "CSPBlock": "C3k2", "C2PSA": True,
+    "Lighting": "Daylight", "Occlusion": "NoOcclusion", "InputSize": "S640",
+    "Augmentation": "LightAug", "HistogramEqualization": False, "Optimizer": "AdamW",
+    "Precision": "FP32", "DetectionMode": "MultiFace", "Head": "DecoupledHead",
+    "NMS": "StandardNMS", "DatasetType": "CustomFace",
+}
+for k, v in DEFAULTS.items():
+    st.session_state.setdefault(k, v)
 
-st.sidebar.subheader("6. Lighting Conditions")
-lighting = st.sidebar.selectbox("LightingConditions", ["Daylightcondition", "LowLightcondition"])
 
-# Map options to actual image size
-imgsz_map = {"S640": 640, "S960": 960, "S1280": 1280}
-actual_imgsz = imgsz_map[input_size]
+def feature_select(label, key, group):
+    st.sidebar.markdown(f"**{group}**")
+    opts = uvl.FEATURES[key]
+    if opts == [True, False]:
+        st.session_state[key] = st.sidebar.checkbox(label, value=st.session_state[key], key=f"w_{key}")
+    else:
+        st.session_state[key] = st.sidebar.selectbox(
+            label, opts, index=opts.index(st.session_state[key]), key=f"w_{key}")
 
-if st.button("🚀 Run Evaluation with these features"):
+
+feature_select("ModelScale", "ModelScale", "1. Backbone")
+feature_select("CSPBlock", "CSPBlock", "")
+feature_select("C2PSA attention block", "C2PSA", "")
+feature_select("LightingConditions", "Lighting", "2. Image Capture")
+feature_select("Occlusion", "Occlusion", "")
+feature_select("InputSize", "InputSize", "3. Data Processing")
+feature_select("Augmentation", "Augmentation", "")
+feature_select("Histogram Equalization", "HistogramEqualization", "")
+feature_select("Optimizer", "Optimizer", "4. Training")
+feature_select("Precision", "Precision", "")
+feature_select("Head", "Head", "5. Detection")
+feature_select("FaceDetectionMode", "DetectionMode", "")
+feature_select("NMS", "NMS", "6. Post-processing")
+feature_select("DatasetType", "DatasetType", "7. Evaluation")
+
+st.sidebar.subheader("Inference thresholds")
+conf_threshold = st.sidebar.slider("Confidence", 0.01, 1.00, 0.25, 0.05)
+iou_threshold = st.sidebar.slider("IoU (NMS)", 0.10, 0.90, 0.45, 0.05)
+
+st.sidebar.subheader("📂 Paths")
+custom_dataset_path = st.sidebar.text_input("Dataset YAML", value=DEFAULT_YAML)
+custom_model_path = st.sidebar.text_input("Trained model (.pt)", value=DEFAULT_MODEL)
+
+selected = {k: st.session_state[k] for k in DEFAULTS}
+args = uvl.config_to_yolo_args(selected)
+is_valid, errors = uvl.validate_configuration(selected)
+
+if is_valid:
+    st.sidebar.success("✅ Configuration satisfies all 6 cross-tree constraints")
+else:
+    st.sidebar.error("❌ Constraint violation(s):")
+    for e in errors:
+        st.sidebar.caption(f"• {e}")
+
+
+tab_dash, tab_flama = st.tabs(["🖥️ Detector Dashboard", "🧬 FlamaPy IDE Configurator"])
+
+# ============================== TAB 1: DASHBOARD ==============================
+with tab_dash:
+    st.title("🖥️ YOLOv11 Face Detection & UVL Configuration Engine")
+    st.markdown("Translate the UVL feature selection into YOLOv11 arguments, then evaluate and run inference.")
+
+    st.subheader("⚙️ UVL → YOLO translation")
+    st.code(
+        f"base_weights = {args['base_weights']!r}\n"
+        f"imgsz        = {args['imgsz']}\n"
+        f"half (FP16)  = {args['half']}\n"
+        f"max_det      = {args['max_det']}  # {selected['DetectionMode']}\n"
+        f"augment      = {'disabled' if args['augment_disabled'] else 'enabled'}\n"
+        f"conf={conf_threshold}, iou={iou_threshold}, device={DEVICE!r}",
+        language="python")
+
+    st.subheader("📊 Model evaluation (real measured results)")
+    eval_mode = st.radio(
+        "Evaluation source",
+        ["📊 Recorded results (paper Table 2 / summary.csv — instant)",
+         "🔬 Live evaluation (run model.val on the trained weights)"],
+        horizontal=True,
+        help="Both use real data. 'Recorded' reads the values measured during our "
+             "experiment sweep (fast, no GPU). 'Live' re-runs model.val() on the "
+             "matching trained weights now.")
+    use_recorded = eval_mode.startswith("📊")
+
+    if not is_valid:
+        st.warning("Fix the constraint violations in the sidebar before evaluating.")
+    elif st.button("🚀 Evaluate this configuration"):
+        weights = uvl.trained_weights_for(selected)
+        metrics, source = None, ""
+        # Live validation on the matching trained weights (unless recorded mode).
+        if not use_recorded and weights is not None and os.path.exists(custom_dataset_path):
+            with st.spinner(f"Running live model.val() on {weights.parent.parent.name}/best.pt ..."):
+                try:
+                    update_dataset_path(custom_dataset_path)
+                    b = load_cached_yolo(str(weights)).val(
+                        data=custom_dataset_path, imgsz=args["imgsz"], half=args["half"],
+                        device=DEVICE, verbose=False, max_det=args["max_det"],
+                        conf=conf_threshold, iou=iou_threshold, workers=0, plots=False).box
+                    metrics = {"P": b.mp, "R": b.mr, "mAP50": b.map50, "mAP50_95": b.map}
+                    source = f"live model.val() on {weights.parent.parent.name}/best.pt"
+                except Exception as e:
+                    st.info(f"Live validation unavailable ({str(e)[:80]}); using recorded results.")
+        # Recorded real measurements from the experiment summary (default / fallback).
+        if metrics is None:
+            m, cfg, note = uvl.measured_metrics(selected)
+            if m is None:
+                st.error(f"No measured results available: {note}")
+                st.stop()
+            metrics, source = m, f"recorded summary.csv [{cfg}] ({note})"
+
+        st.success(f"✅ Source: {source}")
+        f1 = (2 * metrics["P"] * metrics["R"] / (metrics["P"] + metrics["R"])
+              if metrics["P"] + metrics["R"] > 0 else 0.0)
+        c = st.columns(5)
+        c[0].metric("Precision", f"{metrics['P']:.3f}")
+        c[1].metric("Recall", f"{metrics['R']:.3f}")
+        c[2].metric("F1", f"{f1:.3f}")
+        c[3].metric("mAP@50", f"{metrics['mAP50']:.3f}")
+        c[4].metric("mAP@50-95", f"{metrics['mAP50_95']:.3f}")
+        fig, ax = plt.subplots(figsize=(8, 3.5))
+        vals = [metrics["P"], metrics["R"], f1, metrics["mAP50"], metrics["mAP50_95"]]
+        bars = ax.bar(["P", "R", "F1", "mAP@50", "mAP@50-95"], vals,
+                      color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'])
+        ax.set_ylim(0, 1.05)
+        for bar in bars:
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                    f"{bar.get_height():.3f}", ha='center', va='bottom', fontsize=9)
+        st.pyplot(fig)
+
     st.markdown("---")
-    st.subheader("⚙️ Translating UVL features into YOLO Configuration...")
+    st.subheader("📸 Inference on your own image or PDF")
+    types = ["jpg", "jpeg", "png"] + (["pdf"] if fitz else [])
+    uploaded = st.file_uploader(f"Upload an image{' or PDF' if fitz else ''}", type=types)
 
-    # Display how UVL translates to YOLO Config
-    st.code(f"""
-# YOLO Configuration Mapping:
-imgsz = {actual_imgsz}
-half = {True if precision == 'FP16' else False}
-dataset = '{custom_dataset_path}'
-model_path = '{custom_model_path}'
-task = '{face_detection_type}'
-conf = {conf_threshold}
-iou = {iou_threshold}
-    """, language="python")
+    original_image = None
+    if uploaded is not None:
+        if uploaded.name.lower().endswith(".pdf") and fitz:
+            doc = fitz.open(stream=uploaded.read(), filetype="pdf")
+            page = doc.load_page(0)
+            pix = page.get_pixmap(dpi=150)
+            original_image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            st.image(original_image, caption="First PDF page", use_container_width=True)
+        else:
+            original_image = Image.open(uploaded).convert("RGB")
+            st.image(original_image, caption="Uploaded image", use_container_width=True)
+    elif os.path.exists(DEFAULT_IMAGE):
+        original_image = Image.open(DEFAULT_IMAGE).convert("RGB")
+        st.info("Loaded default test image (assets/input_sample.png)")
+        st.image(original_image, caption="Default image", use_container_width=True)
 
-    with st.spinner('Evaluating the model... (may take time depending on dataset size)'):
-        try:
-            # Check for model and data if not default
-            if custom_model_path != FALLBACK_WEIGHTS and not os.path.exists(custom_model_path):
-                st.warning(f"⚠️ Model not found at path: {custom_model_path}, using base weights instead")
-                model_to_use = FALLBACK_WEIGHTS
-            else:
-                model_to_use = custom_model_path
-
-            model = YOLO(model_to_use)
-
-            if custom_dataset_path != "coco8.yaml" and not os.path.exists(custom_dataset_path):
-                st.error(f"❌ Dataset file not found at path: {custom_dataset_path}")
-                st.stop()
-
-            # Dynamically update the dataset path to absolute
-            if custom_dataset_path != "coco8.yaml" and os.path.exists(custom_dataset_path):
-                update_dataset_path(custom_dataset_path)
-
-            if custom_model_path != FALLBACK_WEIGHTS and custom_dataset_path == "coco8.yaml":
-                st.warning(
-                    "⚠️ **Warning**: You are trying to evaluate a custom model using the default `coco8.yaml` dataset. This will cause an 'index out of bounds' error because your model does not have 80 classes like COCO.")
-                st.info(
-                    "💡 **How to fix**: Please enter the path to your custom dataset's `.yaml` file in the sidebar (under 'Evaluation Data Path').")
-                st.stop()
-
-            max_detections = 1 if face_detection_type == "SingleFace" else 300
-            val_device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
-
-            # Validation with custom conf and iou thresholds, workers=0 is required on Windows to avoid bootstrapping RuntimeError
-            results = model.val(
-                data=custom_dataset_path,
-                imgsz=actual_imgsz,
-                half=(precision == 'FP16'),
-                device=val_device,
-                verbose=False,
-                max_det=max_detections,
-                conf=conf_threshold,
-                iou=iou_threshold,
-                workers=0
-            )
-
-            metrics = results.box
-            precision_val = metrics.mp
-            recall_val = metrics.mr
-            map50 = metrics.map50
-            f1 = 2 * (precision_val * recall_val) / (precision_val + recall_val) if (
-                                                                                                precision_val + recall_val) > 0 else 0
-
-            # Calculate Jaccard-based Detection Accuracy
-            accuracy_denom = (precision_val + recall_val - precision_val * recall_val)
-            accuracy_val = (precision_val * recall_val) / accuracy_denom if accuracy_denom > 0 else 0
-
-            # Display results formatted to 2 decimal places (.2f)
-            st.success("✅ Evaluation process completed successfully!")
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Accuracy", f"{accuracy_val:.2f}")
-            col2.metric("Precision", f"{precision_val:.2f}")
-            col3.metric("Recall", f"{recall_val:.2f}")
-            col4.metric("F1 Score", f"{f1:.2f}")
-            col5.metric("mAP@50 (AUC)", f"{map50:.2f}")
-
-            # Chart (formatted to 2 decimal places .2f)
-            st.markdown("### 📈 Evaluation Metrics Chart")
-            fig, ax = plt.subplots(figsize=(8, 4))
-            bars = ax.bar(["Accuracy", "Precision", "Recall", "F1 Score", "mAP@50"],
-                          [accuracy_val, precision_val, recall_val, f1, map50],
-                          color=['#ab7df6', '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728'])
-            ax.set_ylim(0, 1.1)
-
-            for bar in bars:
-                yval = bar.get_height()
-                ax.text(bar.get_x() + bar.get_width() / 2, yval + 0.02, f"{yval:.2f}", ha='center', va='bottom')
-
-            st.pyplot(fig)
-
-        except Exception as e:
-            if "out of bounds" in str(e).lower() and "axis" in str(e).lower():
-                st.error(f"❌ Error during evaluation: {e}")
-                st.info(
-                    "💡 **Reason**: The dataset you selected contains labels with class indices that your face model does not support. Your model is likely trained on 1 class (Face), but the dataset contains other classes.\n\n**Solution**: Please provide the correct path to your custom face dataset's `.yaml` file in the sidebar.")
-            else:
-                st.error(f"An error occurred: {e}")
-
-st.markdown("---")
-st.subheader("📸 2. Test the Model on an Image from Your Device (Inference)")
-uploaded_file = st.file_uploader("Upload an image to test face detection", type=["jpg", "jpeg", "png"])
-
-default_image_path = default_image
-original_image = None
-
-if uploaded_file is not None:
-    original_image = Image.open(uploaded_file)
-    st.image(original_image, caption="Original Uploaded Image", use_container_width=True)
-elif os.path.exists(default_image_path):
-    original_image = Image.open(default_image_path)
-    st.info("ℹ_ Loaded default test image: assets/input_sample.png")
-    st.image(original_image, caption="Default Loaded Image", use_container_width=True)
-
-if original_image is not None:
-    if st.button("🔍 Detect Faces"):
-        with st.spinner("Analyzing image and detecting faces..."):
+    if original_image is not None and st.button("🔍 Detect faces"):
+        with st.spinner("Detecting..."):
             try:
-                # Apply Auto-Lighting Preprocessing
-                processed_image = original_image
-
-                # Convert to grayscale to calculate average brightness
-                grayscale_image = original_image.convert("L")
-                avg_brightness = np.mean(np.array(grayscale_image))
-
-                # If image is dark (brightness < 100 out of 255), enhance it
-                if avg_brightness < 100:
-                    st.info(
-                        f"💡 **Low Light Detected** (Brightness level: {avg_brightness:.1f}/255): Automatically enhancing image for better detection...")
-                    # Increase brightness
-                    enhancer_bright = ImageEnhance.Brightness(processed_image)
-                    processed_image = enhancer_bright.enhance(1.8)  # 80% brighter
-                    # Increase contrast
-                    enhancer_contrast = ImageEnhance.Contrast(processed_image)
-                    processed_image = enhancer_contrast.enhance(1.3)  # 30% more contrast
-
-                    st.image(processed_image, caption="Enhanced Image (Pre-processed for Low Light)",
-                             use_container_width=True)
+                processed = original_image
+                brightness = float(np.mean(np.array(original_image.convert("L"))))
+                if brightness < 100:
+                    st.info(f"💡 Low light ({brightness:.0f}/255): auto-enhancing.")
+                    processed = ImageEnhance.Contrast(
+                        ImageEnhance.Brightness(processed).enhance(1.8)).enhance(1.3)
                 else:
-                    st.success(
-                        f"☀️ **Good Lighting Detected** (Brightness level: {avg_brightness:.1f}/255): No enhancement needed.")
-
-                # Check for model existence
-                model_to_use = custom_model_path if custom_model_path != FALLBACK_WEIGHTS and os.path.exists(
-                    custom_model_path) else FALLBACK_WEIGHTS
-                model = YOLO(model_to_use)
-
-                # Inference with user selected conf and iou thresholds to get high accuracy
-                max_detections = 1 if face_detection_type == "SingleFace" else 300
-                pred_device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+                    st.success(f"☀️ Good lighting ({brightness:.0f}/255).")
+                model_path = (custom_model_path if os.path.exists(custom_model_path) else FALLBACK_WEIGHTS)
+                model = load_cached_yolo(model_path)
                 results = model.predict(
-                    source=processed_image,
-                    imgsz=actual_imgsz,
-                    half=(precision == 'FP16'),
-                    device=pred_device,
-                    show=False,
-                    max_det=max_detections,
-                    conf=conf_threshold,
-                    iou=iou_threshold
-                )
-
-                # Draw boxes
-                res_plotted = results[0].plot()
-
-                st.success(f"✅ Detection complete using model: {model_to_use}")
-                st.image(res_plotted, caption="YOLO Detection Result", use_container_width=True)
-
-                # Show explicit confidence scores
+                    source=processed, imgsz=args["imgsz"], half=args["half"], device=DEVICE,
+                    max_det=args["max_det"], conf=conf_threshold, iou=iou_threshold, verbose=False)
+                st.image(results[0].plot(), caption=f"Detection ({Path(model_path).name})",
+                         use_container_width=True)
                 boxes = results[0].boxes
                 if len(boxes) > 0:
-                    st.write(f"🧑 **Detected {len(boxes)} Face(s):**")
-                    confidences = []
-                    for i, box in enumerate(boxes):
-                        conf = float(box.conf[0]) * 100
-                        confidences.append(conf)
-                        st.info(f"🔹 Face {i + 1}: Confidence **{conf:.1f}%**")
-                    avg_conf = np.mean(confidences)
-                    st.success(f"📈 **Average Detection Confidence: {avg_conf:.1f}%**")
+                    confs = [float(b.conf[0]) * 100 for b in boxes]
+                    st.success(f"🧑 {len(boxes)} face(s), avg confidence {np.mean(confs):.1f}%")
                 else:
-                    st.warning("⚠️ No faces detected in this image.")
-
+                    st.warning("No faces detected.")
             except Exception as e:
-                st.error(f"An error occurred during image analysis: {e}")
+                st.error(f"Inference error: {e}")
+
+# ========================= TAB 2: FLAMAPY CONFIGURATOR =======================
+with tab_flama:
+    st.title("🧬 FlamaPy IDE Feature Configurator")
+    st.markdown("Live cross-tree constraint checking plus the **real** FlamaPy/BDD analysis of `yolo_custom_model.uvl`.")
+
+    col_cfg, col_analysis = st.columns([1.1, 1])
+
+    with col_cfg:
+        st.subheader("Current selection")
+        st.json(selected)
+        if is_valid:
+            st.success("SATISFIABLE — all 6 cross-tree constraints hold.")
+        else:
+            st.error("UNSATISFIABLE — conflicts:")
+            for e in errors:
+                st.caption(f"• {e}")
+        # JSON artifact download (paper schema).
+        artifact = {**selected, **args}
+        st.download_button("💾 Download validated_config.json",
+                           data=json.dumps(artifact, indent=4),
+                           file_name="validated_config.json", mime="application/json")
+
+    with col_analysis:
+        st.subheader("FlamaPy / BDD analysis")
+        st.caption("Computed live from the UVL model (not hardcoded).")
+        if st.button("⚡ Run FlamaPy analysis"):
+            with st.spinner("Parsing UVL and compiling BDD..."):
+                try:
+                    s = cached_uvl_stats()
+                    st.metric("Valid configurations", f"{s['n_configs']:,}")
+                    a, b = st.columns(2)
+                    a.metric("Satisfiable", str(s["satisfiable"]))
+                    b.metric("Dead features", s["n_dead"])
+                    a.metric("Total features", s["n_features"])
+                    b.metric("Leaf features", s["n_leaves"])
+                    a.metric("Dimensions", len(s["dimensions"]))
+                    b.metric("Max depth", s["max_depth"])
+                    st.caption(f"Dimensions: {', '.join(s['dimensions'])}")
+                except Exception as e:
+                    st.error(f"FlamaPy analysis failed: {e}")
+
+        n = st.number_input("Random valid configurations to sample", 1, 20, 3)
+        if st.button("🎲 Sample valid configurations"):
+            with st.spinner("Uniform BDD sampling..."):
+                try:
+                    import analyze_uvl
+                    for i, cfg in enumerate(analyze_uvl.sample(int(n)), 1):
+                        st.caption(f"[{i}] {', '.join(cfg)}")
+                except Exception as e:
+                    st.error(f"Sampling failed: {e}")
