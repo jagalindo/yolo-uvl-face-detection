@@ -32,7 +32,7 @@ def print_uvl_summary():
         print(f"  satisfiable: {s['satisfiable']}, dead features: {s['n_dead']}")
         print(f"  VALID CONFIGURATIONS: {s['n_configs']:,}")
     except Exception as e:
-        print(f"  (FlamaPy analysis unavailable: {e})")
+        print(f"  (flamapy analysis unavailable: {e})")
     print("=" * 58)
 
 

@@ -20,7 +20,7 @@ def launch(script, streamlit=False):
 
 
 MENU = {
-    "1": ("Analyze UVL model (FlamaPy/BDD)", lambda: launch("analyze_uvl.py")),
+    "1": ("Analyze UVL model (flamapy/BDD)", lambda: launch("analyze_uvl.py")),
     "2": ("Validate + evaluate a sample configuration", lambda: launch("parse_uvl.py")),
     "3": ("Launch Streamlit dashboard", lambda: launch("app.py", streamlit=True)),
     "4": ("Train the detector", lambda: launch("train.py")),

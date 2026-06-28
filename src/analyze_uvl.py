@@ -1,4 +1,4 @@
-"""Automated analysis of the YOLOv11 UVL feature model via FlamaPy (BDD backend).
+"""Automated analysis of the YOLOv11 UVL feature model via flamapy (BDD backend).
 
 Reports: validity (satisfiable), #features, #leaf features, tree depth,
 top-level variability dimensions, core/dead features, and the exact number of

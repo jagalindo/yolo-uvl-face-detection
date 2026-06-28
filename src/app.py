@@ -5,8 +5,8 @@ Two tabs:
      run REAL validation (live model.val on the matching trained weights, with
      fallback to recorded runs/experiments/summary.csv), and run live inference
      on an uploaded image or PDF page.
-  2. FlamaPy IDE Configurator - interactive feature tree with live cross-tree
-     constraint checking and the REAL BDD analysis (FlamaPy) of the model.
+  2. flamapy-based configurator - interactive feature tree with live cross-tree
+     constraint checking and the REAL BDD analysis (flamapy) of the model.
 
 Run:  streamlit run src/app.py     (or simply:  python src/app.py)
 """
@@ -61,7 +61,7 @@ def load_cached_yolo(model_path):
 
 @st.cache_resource
 def cached_uvl_stats():
-    """Run the real FlamaPy/BDD analysis once and cache the plain stats."""
+    """Run the real flamapy/BDD analysis once and cache the plain stats."""
     import analyze_uvl
     r = analyze_uvl.analyze()
     return {k: v for k, v in r.items() if not k.startswith("_")}
@@ -148,7 +148,7 @@ else:
         st.sidebar.caption(f"• {e}")
 
 
-tab_dash, tab_flama = st.tabs(["🖥️ Detector Dashboard", "🧬 FlamaPy IDE Configurator"])
+tab_dash, tab_flama = st.tabs(["🖥️ Detector Dashboard", "🧬 flamapy-based Configurator"])
 
 # ============================== TAB 1: DASHBOARD ==============================
 with tab_dash:
@@ -269,10 +269,10 @@ with tab_dash:
             except Exception as e:
                 st.error(f"Inference error: {e}")
 
-# ========================= TAB 2: FLAMAPY CONFIGURATOR =======================
+# ========================= TAB 2: flamapy CONFIGURATOR =======================
 with tab_flama:
-    st.title("🧬 FlamaPy IDE Feature Configurator")
-    st.markdown("Live cross-tree constraint checking plus the **real** FlamaPy/BDD analysis of `yolo_custom_model.uvl`.")
+    st.title("🧬 flamapy-based Configurator")
+    st.markdown("Live cross-tree constraint checking plus the **real** flamapy/BDD analysis of `yolo_custom_model.uvl`.")
 
     col_cfg, col_analysis = st.columns([1.1, 1])
 
@@ -292,9 +292,9 @@ with tab_flama:
                            file_name="validated_config.json", mime="application/json")
 
     with col_analysis:
-        st.subheader("FlamaPy / BDD analysis")
+        st.subheader("flamapy / BDD analysis")
         st.caption("Computed live from the UVL model (not hardcoded).")
-        if st.button("⚡ Run FlamaPy analysis"):
+        if st.button("⚡ Run flamapy analysis"):
             with st.spinner("Parsing UVL and compiling BDD..."):
                 try:
                     s = cached_uvl_stats()
@@ -308,7 +308,7 @@ with tab_flama:
                     b.metric("Max depth", s["max_depth"])
                     st.caption(f"Dimensions: {', '.join(s['dimensions'])}")
                 except Exception as e:
-                    st.error(f"FlamaPy analysis failed: {e}")
+                    st.error(f"flamapy analysis failed: {e}")
 
         n = st.number_input("Random valid configurations to sample", 1, 20, 3)
         if st.button("🎲 Sample valid configurations"):
