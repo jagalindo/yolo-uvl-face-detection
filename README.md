@@ -189,3 +189,14 @@ was assembled from raw `train/` and `val/` folders.
 | Configuration comparison (Table) | `src/finish_experiments.py` | `runs/experiments/summary.csv` |
 | Sampled valid configurations | `python src/analyze_uvl.py --sample N` | — |
 | Qualitative detection figures | `src/app.py` / `src/detect.py` | `assets/`, `runs/` |
+
+## Authors
+Haya Alhadramy
+Dr José A. Galindo
+
+
+## Citation
+The research paper associated with this repository is currently "Under Review". 
+Title: "UVL-Supported Configuration for YOLOv11 Face Detection"
+
+If you find this repository helpful in your research, please star it. A formal citation and DOI will be provided here once the paper is officially accepted and published.
