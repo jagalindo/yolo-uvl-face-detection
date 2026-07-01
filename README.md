@@ -191,8 +191,8 @@ was assembled from raw `train/` and `val/` folders.
 | Qualitative detection figures | `src/app.py` / `src/detect.py` | `assets/`, `runs/` |
 
 ## Authors
-Haya Alhadramy
-Dr José A. Galindo
+* **Haya Alhadramy**
+* **Dr. José A. Galindo**
 
 
 ## Citation
